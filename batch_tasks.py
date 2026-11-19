@@ -333,6 +333,17 @@ class TaskForm:
                 time.sleep(0.8)
         raise StepError(f"«{label}» 选择 «{option}» 失败：{last}")
 
+    def js_input_value(self, placeholder):
+        """直接从可见浮窗的 DOM 读输入框真实值（VOM 会截断超长文本，不能用于校验长链接）。"""
+        expr = ("(()=>{const dl=Array.from(document.querySelectorAll('.el-overlay-dialog'))"
+                ".filter(d=>d.getClientRects().length);const d=dl[dl.length-1];if(!d)return 'no-dialog';"
+                "const i=Array.from(d.querySelectorAll('input')).find(x=>x.placeholder==="
+                + json.dumps(placeholder) + ");return i?i.value:'no-input'})()")
+        ctx, obs = self.br.sync()
+        out = self.br.js(expr, ctx, obs)
+        lines = [l.strip() for l in out.splitlines() if l.strip()]
+        return lines[-1] if lines else ""
+
     def fill_fields(self, row):
         """填任务组/任务名称/跳转链接，并逐项回读，缺哪项补哪项。"""
         want = [("任务组", self.cfg["task_group"]),
@@ -349,32 +360,42 @@ class TaskForm:
 
         for label, val in want:
             for _ in range(3):
-                vom = self.br.observe()
-                ref = self.br.find(vom, "textbox", label)
-                cur = next(i for i in self.br.parse(vom) if i["ref"] == ref)["value"]
-                if self.br.norm(cur) == self.br.norm(val):
-                    break
+                if label == "任务按钮跳转链接":
+                    # 长链接会被 VOM 截断，改用 DOM 真值校验
+                    if self.js_input_value("请输入任务按钮跳转链接") == val:
+                        break
+                else:
+                    vom = self.br.observe()
+                    ref = self.br.find(vom, "textbox", label)
+                    cur = next(i for i in self.br.parse(vom) if i["ref"] == ref)["value"]
+                    if self.br.norm(cur) == self.br.norm(val):
+                        break
                 c, _ = self.br.sync()
-                self.br.fill(ref, val, c)
+                self.br.fill(self.br.find(self.br.observe(), "textbox", label), val, c)
                 time.sleep(0.4)
             else:
-                raise StepError(f"«{label}» 反复填写仍未生效（期望 «{val}»）")
+                raise StepError(f"«{label}» 反复填写仍未生效（期望 «{val[:80]}…»）")
 
     def upload_image(self):
-        ctx, obs = self.br.sync()
-        expr = ("(async()=>{const r=await fetch(%s);const b=await r.blob();"
-                "const dt=new DataTransfer();dt.items.add(new File([b],'task_img.png',{type:'image/png'}));"
-                "const i=document.querySelector('.el-dialog input.el-upload__input');if(!i)return 'no-input';"
+        # 注意：关闭过的浮窗会以不可见节点残留在 DOM 里，
+        # 必须锁定「当前可见」的那个浮窗，否则文件会塞进幽灵表单
+        expr = ("(async()=>{const dlg=Array.from(document.querySelectorAll('.el-overlay-dialog'))"
+                ".find(d=>d.getClientRects().length);if(!dlg)return 'no-dialog';"
+                "const i=dlg.querySelector('input.el-upload__input');if(!i)return 'no-input';"
+                "const r=await fetch(%s);const b=await r.blob();const dt=new DataTransfer();"
+                "dt.items.add(new File([b],'task_img.png',{type:'image/png'}));"
                 "i.files=dt.files;i.dispatchEvent(new Event('change',{bubbles:true}));return 'ok'})()"
                 % json.dumps(self.cfg["image_url"]))
-        out = self.br.js(expr, ctx, obs)
-        if "ok" not in out:
-            raise StepError(f"图片注入失败：{out.strip()[:200]}")
-        for _ in range(15):
-            time.sleep(1.2)
-            vom = self.br.observe()
-            if self.has_image(vom):
-                return
+        for attempt in range(2):
+            ctx, obs = self.br.sync()
+            out = self.br.js(expr, ctx, obs)
+            if "ok" not in out:
+                raise StepError(f"图片注入失败：{out.strip()[:200]}")
+            for _ in range(20):
+                time.sleep(1.2)
+                if self.has_image(self.br.observe()):
+                    return
+            self.log(f"  图片上传未出缩略图，第 {attempt + 1} 次重试", "WARN")
         raise StepError("图片上传后未出现缩略图（可能被后端拒绝）")
 
     @staticmethod
@@ -396,7 +417,7 @@ class TaskForm:
     def verify(self, row):
         vom = self.br.observe()
         checks = [("任务奖励", self.cfg["reward_name"]), ("任务组", self.cfg["task_group"]),
-                  ("任务名称", row["name"]), ("任务按钮跳转链接", row["url"]),
+                  ("任务名称", row["name"]),
                   ("任务类型", self.cfg["task_type"]), ("链接类型", self.cfg["link_type"]),
                   ("链接所属渠道", row["channel"])]
         for label, expect in checks:
@@ -404,6 +425,9 @@ class TaskForm:
             val = next(i for i in self.br.parse(vom) if i["ref"] == ref)["value"]
             if self.br.norm(val) != self.br.norm(expect):
                 raise StepError(f"提交前校验失败：{label} = «{val}»，期望 «{expect}»")
+        # 跳转链接可能超长，VOM 会截断，用 DOM 真值比对
+        if self.js_input_value("请输入任务按钮跳转链接") != row["url"]:
+            raise StepError("提交前校验失败：任务按钮跳转链接与表格不一致")
         if not self.has_image(vom):
             raise StepError("提交前校验失败：任务图片没有缩略图")
         return vom
