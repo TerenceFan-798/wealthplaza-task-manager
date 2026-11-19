@@ -261,7 +261,11 @@ class TaskForm:
                 if 'dialog "新增任务"' in vom:
                     break
             if 'dialog "新增任务"' in vom and self.form_is_fresh(vom):
-                return vom
+                # 浮窗打开后应用可能再执行一次 resetFields，等一拍再确认一次
+                time.sleep(1.2)
+                vom = self.br.observe()
+                if self.form_is_fresh(vom):
+                    return vom
             self.log(f"  浮窗不干净（未打开或带残留值），第 {attempt + 1} 次清理重开", "WARN")
             self.close_stray()
             time.sleep(0.8)
@@ -418,29 +422,48 @@ class TaskForm:
         except Exception:  # noqa: BLE001
             return False
 
-    def submit(self):
+    def dialog_hidden(self, timeout="20s"):
+        """等待浮窗不可见；用 wait-for-element 而不是脚本，避免观察被页面变化作废。"""
+        out = self.br.run(["wait-for-element", "--selector", ".el-dialog", "--state", "hidden",
+                           "--timeout", timeout, "--poll-ms", "300", "--json",
+                           "--session", self.br.session], check=False)
+        return '"satisfied": true' in out or '"satisfied":true' in out, out
+
+    def toast_text(self):
+        out = self.br.run(["read", "--selector", ".el-message", "--json",
+                           "--session", self.br.session], check=False)
+        texts = re.findall(r'"text":\s*"((?:[^"\\]|\\.)*)"', out)
+        return " | ".join(t for t in texts if t.strip())[:200]
+
+    def net_cursor(self):
+        out = self.br.run(["network", "--session", self.br.session, "--limit", "5"], check=False)
+        nums = [int(x) for x in re.findall(r"#(\d+)", out)]
+        return max(nums) if nums else 0
+
+    def submit(self, row):
+        # 点提交前再完整校验一遍，防止值在最后几秒被应用重置掉
+        self.verify(row)
+        mark = self.net_cursor()
         ctx, _ = self.br.sync()
         vom = self.br.observe()
         ref = self.br.find(vom, "button", "提交审批")
         self.br.click(ref, ctx)
-        deadline = time.time() + 18
-        confirmed = False
-        last = ""
-        while time.time() < deadline:
+        # 以「本次点击之后是否真的发出提交请求」作为唯一成功依据
+        committed = False
+        for _ in range(12):
             time.sleep(1.0)
-            vom = self.br.observe()
-            if 'dialog "新增任务"' not in vom:
-                return vom
-            last = vom
-            if not confirmed and "确定" in vom:
-                try:
-                    c, _ = self.br.sync()
-                    self.br.click(self.br.find(vom, "button", "确定"), c)
-                    confirmed = True
-                except StepError:
-                    pass
-        bad = [w for w in ("失败", "错误", "已存在", "请输入", "不能为空", "请选择") if w in last]
-        raise StepError(f"提交后浮窗未关闭：{'; '.join(bad) or '无明确提示'}")
+            net = self.br.run(["network", "--session", self.br.session,
+                               f"--since={mark}", "--limit", "30"], check=False)
+            if "commitNewMissionEdit" in net and "POST" in net:
+                committed = True
+                break
+        toast = self.toast_text()
+        if not committed:
+            raise StepError(f"未检测到提交请求，判定未提交（页面提示：{toast or '无'}）")
+        for word in ("失败", "错误", "不能为空", "已存在"):
+            if word in toast:
+                raise StepError(f"提交返回异常提示：{toast}")
+        return toast
 
 
 # ---------------------------------------------------------------- 主流程
@@ -509,7 +532,7 @@ def main():
                 log(f"  DRY-RUN 已填完，停在提交前；截图 {shot}", "WARN")
                 log("  dry-run 结束，浮窗保持打开，请人工检查后关闭")
                 return 0
-            form.submit()
+            form.submit(r)
             ok += 1
             streak = 0
             log(f"  ✔ n={r['n']} «{r['name']}» 已提交审批")
