@@ -1,0 +1,7 @@
+# 运行产物与页面快照，不入库
+runs/
+*.png
+*.html
+task_data.tsv
+__pycache__/
+*.pyc
