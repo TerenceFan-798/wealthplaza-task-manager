@@ -1,24 +1,31 @@
 {
   "excel_path": "C:\\Users\\Vincent\\Desktop\\11月浏览任务.xlsx",
   "sheet_name": "浏览任务",
+  "data_start_row": 1,
+  "end_row": null,
+
   "col_name": "A",
   "col_url": "B",
   "col_channel": "C",
-  "data_start_row": 1,
+  "col_image": null,
+  "col_group": null,
+
   "image_path": "C:\\Users\\Vincent\\WorkBuddy\\2026-11-18-16-08-38\\assets\\task_img.png",
-  "image_url": "http://127.0.0.1:8765/task_img.png",
+  "image_dir": "C:\\Users\\Vincent\\WorkBuddy\\2026-11-18-16-08-38\\assets",
+  "asset_base_url": "http://127.0.0.1:8765/",
+
   "bsk_exe": "bsk",
-  "session": "caom",
+  "session": "",
+
   "task_group": "浏览任务",
   "reward_name": "体验北极星账户诊断服务",
   "reward_pick_nth": 0,
   "task_type": "普通任务-浏览",
   "link_type": "外部跳转",
-  "start_index": 1,
-  "end_index": 50,
-  "submit": true,
+
+  "state_path": "C:\\Users\\Vincent\\WorkBuddy\\2026-11-18-16-08-38\\state\\submitted.json",
+  "skip_invalid_rows": true,
   "stop_on_error": true,
   "step_timeout": 60,
-  "settle_ms": 1200,
   "screenshot_dir": "C:\\Users\\Vincent\\WorkBuddy\\2026-11-18-16-08-38\\runs"
 }
